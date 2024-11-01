@@ -1,26 +1,92 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Camera Stream</title>
-  <style>
-    img {
-      width: 100%;
-      height: auto;
-    }
-  </style>
-  <script src="/socket.io/socket.io.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Video Stream</title>
 </head>
 <body>
-  <h1>Camera Stream</h1>
-  <img id="camera" src="" alt="Camera Stream" />
-  <script>
-    const socket = io();
-    const camera = document.getElementById("camera");
+    <h1>WebRTC Video Stream</h1>
+    <video id="localVideo" autoplay playsinline></video>
+    <video id="remoteVideo" autoplay playsinline></video>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const localVideo = document.getElementById("localVideo");
+        const remoteVideo = document.getElementById("remoteVideo");
+        const socket = io();
 
-    socket.on("image", (data) => {
-      camera.src = "data:image/jpeg;base64," + data.buffer;
-    });
-  </script>
+        let localStream;
+        let peerConnection;
+        const configuration = {
+            iceServers: [{ urls: "stun:stun.l.google.com:19302" }] // Sử dụng STUN server công cộng
+        };
+
+        async function startVideo() {
+            try {
+                // Lấy video từ camera
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                localVideo.srcObject = localStream;
+
+                // Thiết lập kết nối WebRTC
+                setupPeerConnection();
+
+            } catch (error) {
+                console.error("Error accessing media devices.", error);
+            }
+        }
+
+        function setupPeerConnection() {
+            peerConnection = new RTCPeerConnection(configuration);
+
+            // Thêm luồng video của local vào peer connection
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+
+            // Lắng nghe khi nhận được luồng video từ remote
+            peerConnection.ontrack = (event) => {
+                if (event.streams && event.streams[0]) {
+                    remoteVideo.srcObject = event.streams[0];
+                }
+            };
+
+            // Gửi ICE candidate đến signaling server
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit("candidate", event.candidate);
+                }
+            };
+        }
+
+        // Bắt đầu quá trình gọi khi có kết nối
+        socket.on("offer", async (offer) => {
+            if (!peerConnection) setupPeerConnection();
+
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            socket.emit("answer", answer);
+        });
+
+        socket.on("answer", (answer) => {
+            peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        });
+
+        socket.on("candidate", (candidate) => {
+            peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        });
+
+        // Bắt đầu kết nối WebRTC
+        async function makeCall() {
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            socket.emit("offer", offer);
+        }
+
+        // Bắt đầu video và gọi
+        startVideo().then(() => {
+            socket.on("connect", makeCall);
+        });
+    </script>
 </body>
 </html>
